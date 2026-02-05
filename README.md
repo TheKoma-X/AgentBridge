@@ -11,6 +11,7 @@ AgentBridge is the universal protocol that enables seamless communication and co
 - **Universal Protocol**: Standardized message format for cross-framework communication
 - **Framework Adapters**: Connect any AI agent framework through pluggable adapters
 - **Workflow Engine**: Cross-framework orchestration and task management
+- **AI Model Management**: Intelligent model routing and capability-based selection
 - **Pre-built Templates**: Ready-to-use templates for common AI workflows
 - **Enterprise Security**: Multi-layer authentication, authorization, and encryption
 - **Advanced Monitoring**: Comprehensive logging, metrics, and observability
@@ -30,6 +31,7 @@ AgentBridge is the universal protocol that enables seamless communication and co
 - **Framework Adapters**: Pre-built adapters for major agent frameworks
 - **Tool Standardization**: Unified tool interfaces across different frameworks
 - **Workflow Composition**: Combine agents from different frameworks into single workflows
+- **AI Model Orchestration**: Intelligent routing based on model capabilities and pricing
 - **Security First**: Sandboxed execution and permission management
 
 ## Supported Frameworks
@@ -143,6 +145,48 @@ bridge = AgentBridge(config_path="secure_config.yaml")
 # Generate secure tokens
 read_token = bridge.security_manager.generate_token(["read"], expires_in_hours=24)
 admin_token = bridge.security_manager.generate_token(["read", "write", "admin"], expires_in_hours=1)
+```
+
+### AI Model Management
+AgentBridge includes intelligent model management for optimal AI resource utilization:
+
+```python
+from agentbridge import AgentBridge, get_model_components
+
+ModelManager, ModelSpec, ModelCapability, ModelProvider = get_model_components()
+
+# Create a bridge instance
+bridge = AgentBridge()
+model_manager = bridge.model_manager
+
+# Register a model
+gpt_model = ModelSpec(
+    id="gpt-4-turbo",
+    name="GPT-4 Turbo",
+    provider=ModelProvider.OPENAI,
+    capabilities=[ModelCapability.TEXT_GENERATION, ModelCapability.TOOLS],
+    max_tokens=128000,
+    context_window=128000,
+    pricing={"input": 0.01, "output": 0.03},  # per 1k tokens
+    endpoint="https://api.openai.com/v1/chat/completions"
+)
+
+model_manager.register_model(gpt_model)
+
+# Find models by capability
+text_models = model_manager.router.find_models_by_capability(ModelCapability.TEXT_GENERATION)
+
+# Route tasks to best-suited models
+best_model = model_manager.router.find_best_model([
+    ModelCapability.TEXT_GENERATION, 
+    ModelCapability.TOOLS
+])
+
+# Automatically route tasks based on requirements
+result = await model_manager.route_task_to_model(
+    "Analyze this document and summarize key points",
+    [ModelCapability.TEXT_GENERATION, ModelCapability.SUMMARIZATION]
+)
 ```
 
 ### Workflow Engine
@@ -265,12 +309,18 @@ AgentBridge operates as a middleware layer that translates between different age
 [Framework A] <---> [AgentBridge] <---> [Framework B]
      |                   |                   |
    Protocol A        Translation       Protocol B
+                     + Model Mgmt
+                     + Workflow Eng
+                     + Security
+                     + Monitoring
 ```
 
 The system includes:
 - **Core Bridge**: Central hub for message routing
 - **Protocol Layer**: Standardized message format and translation
 - **Adapters**: Framework-specific connectors
+- **Model Management**: Intelligent routing based on capabilities and cost
+- **Workflow Engine**: Cross-framework orchestration and task management
 - **Configuration System**: Comprehensive config management
 - **Logging System**: Advanced logging with correlation tracking
 - **Metrics System**: Performance monitoring and collection

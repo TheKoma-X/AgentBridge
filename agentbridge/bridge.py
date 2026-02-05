@@ -11,6 +11,7 @@ from .config import BridgeConfig, ConfigManager
 from .logging import get_logger, get_metrics_collector
 from .security import get_security_manager, AuthenticationError, AuthorizationError
 from .workflow import WorkflowEngine
+from .models import ModelManager
 
 
 class AgentBridge:
@@ -29,6 +30,7 @@ class AgentBridge:
         self.config = self.config_manager.config
         self.security_manager = get_security_manager(self.config)
         self._workflow_engine = None  # Initialize later to avoid circular import
+        self.model_manager = ModelManager(self.config)  # Initialize model manager
 
     def connect_framework(self, framework_name: str, endpoint: str, **kwargs):
         """Connect to a specific agent framework."""
@@ -208,6 +210,15 @@ class AgentBridge:
             status["workflow_engine"] = {
                 "registered_workflows": len(self._workflow_engine.workflow_definitions),
                 "active_executions": len(self._workflow_engine.active_executions)
+            }
+        
+        # Add model manager info
+        if hasattr(self, 'model_manager') and self.model_manager:
+            model_stats = self.model_manager.get_usage_statistics()
+            status["model_manager"] = {
+                "registered_models": model_stats["models_registered"],
+                "total_requests": model_stats["total_requests"],
+                "total_cost": model_stats["total_cost"]
             }
         
         return status

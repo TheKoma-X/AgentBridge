@@ -32,6 +32,12 @@ def _import_workflows():
     from .workflow import WorkflowEngine, WorkflowBuilder, WorkflowDefinition, TaskDefinition, WorkflowStatus, TaskStatus
     return WorkflowEngine, WorkflowBuilder, WorkflowDefinition, TaskDefinition, WorkflowStatus, TaskStatus
 
+# Import model components separately to avoid circular imports
+def _import_models():
+    """Lazy import for model components to avoid circular imports."""
+    from .models import ModelManager, ModelRouter, ModelSpec, ModelCapability, ModelProvider
+    return ModelManager, ModelRouter, ModelSpec, ModelCapability, ModelProvider
+
 # Define all exports
 __all__ = [
     "AgentBridge", 
@@ -56,7 +62,12 @@ __all__ = [
     "WorkflowDefinition",
     "TaskDefinition",
     "WorkflowStatus",
-    "TaskStatus"
+    "TaskStatus",
+    "ModelManager",
+    "ModelRouter",
+    "ModelSpec",
+    "ModelCapability",
+    "ModelProvider"
 ]
 
 # Provide lazy loading functions
@@ -64,3 +75,8 @@ def get_workflow_components():
     """Get workflow components without causing circular imports."""
     from .workflow import WorkflowEngine, WorkflowBuilder, WorkflowDefinition, TaskDefinition, WorkflowStatus, TaskStatus
     return WorkflowEngine, WorkflowBuilder, WorkflowDefinition, TaskDefinition, WorkflowStatus, TaskStatus
+
+def get_model_components():
+    """Get model components without causing circular imports."""
+    from .models import ModelManager, ModelRouter, ModelSpec, ModelCapability, ModelProvider
+    return ModelManager, ModelRouter, ModelSpec, ModelCapability, ModelProvider
