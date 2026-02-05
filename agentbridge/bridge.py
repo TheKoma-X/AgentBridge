@@ -13,6 +13,9 @@ from .security import get_security_manager, AuthenticationError, AuthorizationEr
 from .workflow import WorkflowEngine
 from .models import ModelManager
 from .intelligence import IntelligenceManager, OptimizationStrategy
+from .memory import MemoryManager
+from .events import EventBus, Event, EventType
+from .evaluation import TraceRecorder
 # Import ExtendedAdapterManager lazily to avoid requiring aiohttp at module level
 
 
@@ -34,6 +37,9 @@ class AgentBridge:
         self._workflow_engine = None  # Initialize later to avoid circular import
         self.model_manager = ModelManager(self.config)  # Initialize model manager
         self.intelligence_manager = IntelligenceManager(self.config, self.model_manager)  # Initialize intelligence
+        self.memory_manager = MemoryManager(self.config)  # Initialize memory
+        self.event_bus = EventBus()  # Initialize event bus
+        self.trace_recorder = TraceRecorder()  # Initialize trace recorder
         self._extended_adapter_manager = None  # Initialize extended adapters lazily
 
     def connect_framework(self, framework_name: str, endpoint: str, **kwargs):
@@ -144,6 +150,25 @@ class AgentBridge:
             
             # Record metrics for intelligence
             elapsed_time = time.time() - start_time
+            
+            # Publish event
+            await self.event_bus.emit(EventType.MESSAGE_SENT, {
+                "source": source_framework,
+                "target": target_framework,
+                "message_id": message.id if hasattr(message, 'id') else "unknown",
+                "duration": elapsed_time
+            })
+            
+            # Record trace
+            self.trace_recorder.record(
+                source=source_framework,
+                target=target_framework,
+                message=message.content,
+                result=result,
+                duration=elapsed_time,
+                success=True
+            )
+            
             await self.intelligence_manager.record_task_outcome(
                 target_framework,
                 str(message.type.value if hasattr(message, 'type') and message.type else 'unknown'),
@@ -169,6 +194,23 @@ class AgentBridge:
             logger.exception("Bridge", f"Failed to send message from {source_framework} to {target_framework}", exc_info=e)
             metrics.increment_counter('errors')
             metrics.record_timer('avg_response_time', elapsed_time)
+            
+            # Publish event for error
+            await self.event_bus.emit(EventType.ERROR_OCCURRED, {
+                "source": source_framework,
+                "target": target_framework,
+                "error": str(e)
+            })
+            
+            # Record failed trace
+            self.trace_recorder.record(
+                source=source_framework,
+                target=target_framework,
+                message=message.content if hasattr(message, 'content') else {},
+                duration=elapsed_time,
+                success=False,
+                error=str(e)
+            )
             
             # Record failure for intelligence
             await self.intelligence_manager.record_task_outcome(

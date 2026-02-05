@@ -452,6 +452,75 @@ class APIAdapter(BaseExtendedAdapter):
         self.is_connected = False
 
 
+class HumanAdapter(BaseExtendedAdapter):
+    """
+    Adapter for Human-in-the-Loop interactions.
+    Stores messages in a queue for human review/response via API.
+    """
+    
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__("human", config)
+        self.pending_tasks: Dict[str, Dict[str, Any]] = {}
+        self.completed_tasks: Dict[str, Dict[str, Any]] = {}
+        
+    async def connect(self) -> bool:
+        """Simulate connection"""
+        self.is_connected = True
+        return True
+        
+    async def execute_task(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Submit a task for human review.
+        This is non-blocking in this implementation (returns 'pending').
+        The caller should poll for status or use a callback mechanism.
+        """
+        if not self.is_connected:
+            raise RuntimeError("Not connected")
+            
+        task_id = task_data.get("id") or f"human_task_{len(self.pending_tasks)}"
+        
+        # Store the task
+        self.pending_tasks[task_id] = {
+            "task_data": task_data,
+            "status": "pending_approval",
+            "timestamp": asyncio.get_event_loop().time()
+        }
+        
+        # In a real async workflow, we might wait here using an Event
+        # For this simple adapter, we return PENDING status
+        
+        return {
+            "status": "pending",
+            "task_id": task_id,
+            "message": "Task submitted for human approval",
+            "adapter": self.name
+        }
+        
+    def submit_human_response(self, task_id: str, response: Dict[str, Any]) -> bool:
+        """
+        Called by the API when a human responds.
+        """
+        if task_id in self.pending_tasks:
+            task = self.pending_tasks.pop(task_id)
+            task["status"] = "completed"
+            task["response"] = response
+            task["completed_at"] = asyncio.get_event_loop().time()
+            self.completed_tasks[task_id] = task
+            return True
+        return False
+        
+    def get_pending_tasks(self) -> List[Dict[str, Any]]:
+        """Get all tasks waiting for human input."""
+        return [
+            {"id": k, **v} for k, v in self.pending_tasks.items()
+        ]
+
+    async def disconnect(self):
+        """Disconnect"""
+        self.is_connected = False
+
+
+
 class ExtendedAdapterManager:
     """Manager for extended adapters"""
     
@@ -462,7 +531,8 @@ class ExtendedAdapterManager:
             'llamaindex': LlamaIndexAdapter,
             'haystack': HaystackAdapter,
             'database': DatabaseAdapter,
-            'api': APIAdapter
+            'api': APIAdapter,
+            'human': HumanAdapter
         }
     
     def register_adapter(self, name: str, adapter_class):

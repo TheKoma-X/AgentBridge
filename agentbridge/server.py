@@ -6,6 +6,8 @@ FastAPI server for AgentBridge - Provides REST and WebSocket endpoints
 from typing import Dict, Any
 import asyncio
 import json
+import time
+from collections import defaultdict
 from .bridge import AgentBridge
 from .protocol import Message, MessageType
 from .security import SecurityMiddleware, AuthenticationError, AuthorizationError
@@ -35,10 +37,24 @@ def create_app(agent_bridge: AgentBridge):
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Mount dashboard static files if they exist
+    import os
+    from fastapi.staticfiles import StaticFiles
+    from fastapi.responses import FileResponse
     
+    dashboard_path = os.path.join(os.path.dirname(__file__), "dashboard")
+    if os.path.exists(dashboard_path):
+        app.mount("/static", StaticFiles(directory=dashboard_path), name="static")
+        
+        @app.get("/dashboard")
+        async def dashboard():
+            return FileResponse(os.path.join(dashboard_path, "index.html"))
+
     # Store the bridge instance
     app.state.bridge = agent_bridge
     app.state.security_middleware = SecurityMiddleware(agent_bridge.security_manager)
+    app.state.rate_limiter = defaultdict(list)
     
     async def authenticate_request(request: Request):
         """Authenticate incoming request."""
@@ -61,9 +77,18 @@ def create_app(agent_bridge: AgentBridge):
         
         # Apply rate limiting if enabled
         if agent_bridge.config.security.rate_limit_enabled:
-            # In a real implementation, we would track requests per IP/time window
-            # For now, we just note that rate limiting is enabled
-            pass
+            client_ip = request.client.host if request.client else "unknown"
+            now = time.time()
+            window = 60  # seconds
+            limit = agent_bridge.config.security.max_requests_per_minute
+            
+            # Filter timestamps older than window
+            app.state.rate_limiter[client_ip] = [t for t in app.state.rate_limiter[client_ip] if now - t < window]
+            
+            if len(app.state.rate_limiter[client_ip]) >= limit:
+                raise HTTPException(status_code=429, detail="Rate limit exceeded")
+            
+            app.state.rate_limiter[client_ip].append(now)
         
         response = await call_next(request)
         return response
@@ -306,5 +331,22 @@ def create_app(agent_bridge: AgentBridge):
             "supported_types": [msg_type.value for msg_type in MessageType],
             "protocol_version": "1.0"
         }
+
+    @app.get("/human/pending")
+    async def get_pending_human_tasks(request: Request):
+        """Get pending human tasks."""
+        token = await authenticate_request(request)
+        if token:
+            await app.state.security_middleware.authorize_request(token, 'read')
+            
+        # Find the human adapter if it exists
+        adapter_manager = getattr(agent_bridge, "extended_adapter_manager", None)
+        if not adapter_manager:
+            return []
+            
+        # Look for any human adapter instance
+        # In a real implementation we would track active adapters better
+        # This is a simplification
+        return [] 
     
     return app

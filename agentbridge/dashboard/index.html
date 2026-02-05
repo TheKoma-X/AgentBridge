@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AgentBridge Dashboard</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .header { background: #333; color: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        h2 { margin-top: 0; color: #333; }
+        .metric { font-size: 24px; font-weight: bold; color: #007bff; }
+        .status-online { color: green; }
+        .status-offline { color: red; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { text-align: left; padding: 8px; border-bottom: 1px solid #ddd; }
+        .log-container { height: 300px; overflow-y: auto; background: #1e1e1e; color: #0f0; padding: 10px; font-family: monospace; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>AgentBridge Dashboard</h1>
+            <p>Status: <span id="system-status" class="status-online">Connecting...</span></p>
+        </div>
+        
+        <div class="grid">
+            <div class="card">
+                <h2>System Overview</h2>
+                <div id="metrics">Loading metrics...</div>
+            </div>
+            
+            <div class="card">
+                <h2>Connected Frameworks</h2>
+                <div id="frameworks">Loading frameworks...</div>
+            </div>
+            
+            <div class="card">
+                <h2>Pending Human Tasks</h2>
+                <div id="human-tasks">No pending tasks</div>
+            </div>
+        </div>
+        
+        <div class="card" style="margin-top: 20px;">
+            <h2>Recent Activity Logs</h2>
+            <div class="log-container" id="logs">
+                <div>System initialized...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = window.location.origin;
+
+        async function updateStatus() {
+            try {
+                const response = await fetch(`${API_BASE}/status`);
+                const data = await response.json();
+                
+                document.getElementById('system-status').textContent = data.status || 'Online';
+                document.getElementById('system-status').className = 'status-online';
+                
+                let metricsHtml = `
+                    <p>Uptime: ${data.uptime || 'N/A'}</p>
+                    <p>Total Messages: ${data.metrics?.total_messages || 0}</p>
+                    <p>Active Workflows: ${data.metrics?.active_workflows || 0}</p>
+                `;
+                document.getElementById('metrics').innerHTML = metricsHtml;
+                
+                let fwHtml = '<table><tr><th>Name</th><th>Status</th></tr>';
+                if (data.connected_frameworks) {
+                    for (const [name, info] of Object.entries(data.connected_frameworks)) {
+                        fwHtml += `<tr><td>${name}</td><td>Connected</td></tr>`;
+                    }
+                }
+                fwHtml += '</table>';
+                document.getElementById('frameworks').innerHTML = fwHtml;
+                
+            } catch (e) {
+                document.getElementById('system-status').textContent = 'Offline';
+                document.getElementById('system-status').className = 'status-offline';
+            }
+        }
+        
+        async function checkHumanTasks() {
+            try {
+                // Assuming we expose this endpoint
+                const response = await fetch(`${API_BASE}/human/pending`);
+                if (response.ok) {
+                    const tasks = await response.json();
+                    if (tasks.length > 0) {
+                        let html = '<table><tr><th>ID</th><th>Task</th><th>Action</th></tr>';
+                        tasks.forEach(t => {
+                            html += `<tr>
+                                <td>${t.id}</td>
+                                <td>${t.task_data?.operation || 'Unknown'}</td>
+                                <td><button onclick="alert('Approval UI would open here')">Review</button></td>
+                            </tr>`;
+                        });
+                        html += '</table>';
+                        document.getElementById('human-tasks').innerHTML = html;
+                    } else {
+                        document.getElementById('human-tasks').innerHTML = 'No pending tasks';
+                    }
+                }
+            } catch (e) {
+                // Endpoint might not exist yet
+            }
+        }
+
+        // Update every 5 seconds
+        setInterval(updateStatus, 5000);
+        setInterval(checkHumanTasks, 5000);
+        updateStatus();
+    </script>
+</body>
+</html>
