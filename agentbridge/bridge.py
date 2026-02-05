@@ -9,6 +9,8 @@ from .protocol import AgentProtocol, Message
 from .adapter import AdapterRegistry
 from .config import BridgeConfig, ConfigManager
 from .logging import get_logger, get_metrics_collector
+from .security import get_security_manager, AuthenticationError, AuthorizationError
+from .workflow import WorkflowEngine
 
 
 class AgentBridge:
@@ -25,6 +27,8 @@ class AgentBridge:
         self.message_queue = asyncio.Queue()
         self.config_manager = ConfigManager(config_path)
         self.config = self.config_manager.config
+        self.security_manager = get_security_manager(self.config)
+        self._workflow_engine = None  # Initialize later to avoid circular import
 
     def connect_framework(self, framework_name: str, endpoint: str, **kwargs):
         """Connect to a specific agent framework."""
@@ -32,6 +36,12 @@ class AgentBridge:
         metrics = get_metrics_collector()
         
         try:
+            # Security check: verify if framework is trusted
+            if not self.security_manager.is_trusted_framework(framework_name):
+                error_msg = f"Framework {framework_name} is not in trusted frameworks list"
+                logger.error("Bridge", error_msg)
+                raise ValueError(error_msg)
+            
             if framework_name not in self.adapter_registry.adapters:
                 error_msg = f"Adapter for {framework_name} not registered"
                 logger.error("Bridge", error_msg)
@@ -70,6 +80,19 @@ class AgentBridge:
         metrics = get_metrics_collector()
         
         try:
+            # Security check: verify both frameworks are trusted
+            if not self.security_manager.is_trusted_framework(source_framework):
+                error_msg = f"Source framework {source_framework} is not trusted"
+                logger.error("Bridge", error_msg)
+                metrics.increment_counter('errors')
+                raise ValueError(error_msg)
+                
+            if not self.security_manager.is_trusted_framework(target_framework):
+                error_msg = f"Target framework {target_framework} is not trusted"
+                logger.error("Bridge", error_msg)
+                metrics.increment_counter('errors')
+                raise ValueError(error_msg)
+            
             if target_framework not in self.adapters:
                 error_msg = f"Target framework {target_framework} not connected"
                 logger.error("Bridge", error_msg)
@@ -82,6 +105,14 @@ class AgentBridge:
                 metrics.increment_counter('errors')
                 raise ValueError(error_msg)
                 
+            # Encrypt message content if security requires it
+            if self.config.security.encryption_enabled and message.content:
+                encrypted_content = self.security_manager.encrypt_data(str(message.content))
+                # Create a copy of the message with encrypted content
+                import copy
+                message = copy.copy(message)
+                message.content = {"encrypted_data": encrypted_content}
+            
             # Translate message to target framework's protocol
             translated_msg = self.protocol.translate_message(
                 message, 
@@ -164,10 +195,49 @@ class AgentBridge:
         
         metrics = get_metrics_collector()
         
-        return {
+        status = {
             "connected_frameworks": list(self.connected_frameworks.keys()),
             "adapter_count": len(self.adapters),
             "registry_status": self.adapter_registry.get_status(),
             "config_loaded": bool(self.config),
             "metrics": metrics.get_metrics()
         }
+        
+        # Add workflow info if available
+        if hasattr(self, '_workflow_engine') and self._workflow_engine:
+            status["workflow_engine"] = {
+                "registered_workflows": len(self._workflow_engine.workflow_definitions),
+                "active_executions": len(self._workflow_engine.active_executions)
+            }
+        
+        return status
+
+    def get_workflow_engine(self):
+        """Get the workflow engine, initializing it if needed."""
+        if self._workflow_engine is None:
+            from .workflow import WorkflowEngine
+            self._workflow_engine = WorkflowEngine(self)
+        return self._workflow_engine
+
+    async def start_server(self, host: str = "0.0.0.0", port: int = 8080):
+        """Start the FastAPI server."""
+        from .server import create_app
+        import uvicorn
+        
+        app = create_app(self)
+        
+        # Configure uvicorn to use the specified host and port
+        config = uvicorn.Config(app, host=host, port=port, log_level="info")
+        
+        # Add workflow engine to app state if needed
+        app.state.workflow_engine = self.get_workflow_engine()
+        
+        server = uvicorn.Server(config)
+        
+        try:
+            await server.serve()
+        except KeyboardInterrupt:
+            print("Server stopped by user")
+        except Exception as e:
+            print(f"Server error: {e}")
+            raise

@@ -1,0 +1,90 @@
+# Example configuration for connecting multiple AI agent frameworks
+version: "1.1"
+
+server:
+  host: "0.0.0.0"
+  port: 8080
+  ssl_enabled: false
+
+security:
+  require_auth: true
+  encryption_enabled: true
+  auth_tokens:
+    - token: "admin-token-placeholder"  # Replace with generated token
+      permissions: ["admin", "read", "write"]
+      expires_at: null  # Never expires, or specify ISO date
+    - token: "user-token-placeholder"   # Replace with generated token
+      permissions: ["read", "write"]
+      expires_at: "2025-12-31T23:59:59Z"
+  trusted_frameworks_only: true
+  max_request_size: 10485760  # 10MB
+
+frameworks:
+  # CrewAI Framework Configuration
+  - name: "crewai_coordinator"
+    endpoint: "http://crewai-service:8000"
+    adapter: "crewai"
+    enabled: true
+    connection_timeout: 30
+    retry_attempts: 3
+    metadata:
+      description: "CrewAI multi-agent coordinator"
+      capabilities: ["planning", "coordination", "task_delegation"]
+
+  # LangGraph Framework Configuration
+  - name: "langgraph_state_machine"
+    endpoint: "http://langgraph-service:8001"
+    adapter: "langgraph"
+    enabled: true
+    connection_timeout: 30
+    retry_attempts: 3
+    metadata:
+      description: "LangGraph state machine orchestrator"
+      capabilities: ["state_management", "conditional_logic", "branching"]
+
+  # AutoGen Framework Configuration
+  - name: "autogen_group_chat"
+    endpoint: "http://autogen-service:8002"
+    adapter: "autogen"
+    enabled: true
+    connection_timeout: 30
+    retry_attempts: 3
+    metadata:
+      description: "AutoGen group chat manager"
+      capabilities: ["multi_agent_conversation", "code_execution", "tool_use"]
+
+  # Claude Flow Framework Configuration
+  - name: "claude_flow_manager"
+    endpoint: "http://claude-flow-service:8003"
+    adapter: "claude_flow"
+    enabled: true
+    connection_timeout: 30
+    retry_attempts: 3
+    metadata:
+      description: "Claude Flow process orchestrator"
+      capabilities: ["process_definition", "human_in_the_loop", "approval_workflows"]
+
+logging:
+  level: "INFO"
+  file_output: "./logs/agentbridge.log"
+  max_file_size: 10485760  # 10MB
+  backup_count: 5
+  include_timestamps: true
+  include_level: true
+  correlation_tracking: true
+
+metrics:
+  enabled: true
+  collection_interval: 60  # seconds
+  export_format: "prometheus"  # prometheus, json, or none
+  retention_days: 30
+
+# Advanced workflow configuration
+workflows:
+  enabled: true
+  max_concurrent_executions: 10
+  default_timeout: 3600  # 1 hour
+  retry_policy:
+    max_attempts: 3
+    backoff_multiplier: 2.0
+    initial_delay: 1.0

@@ -1,0 +1,75 @@
+version: '3.8'
+
+services:
+  agentbridge:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config:/app/config
+      - ./logs:/app/logs
+    environment:
+      - PYTHONPATH=/app
+      - AGENTBRIDGE_CONFIG_PATH=/app/config/config.yaml
+    networks:
+      - agent_network
+    restart: unless-stopped
+
+  # Example framework services that could integrate with AgentBridge
+  crewai-service:
+    image: python:3.10-slim
+    volumes:
+      - ./examples:/app/examples
+    environment:
+      - PYTHONPATH=/app
+    command: >
+      sh -c "pip install crewai && 
+             python -c '
+             from crewai import Agent, Task, Crew
+             # Example CrewAI integration would go here
+             print(\"CrewAI service ready for AgentBridge integration\")
+             import time
+             while True:
+               time.sleep(60)
+             '"
+    networks:
+      - agent_network
+    depends_on:
+      - agentbridge
+    restart: unless-stopped
+
+  langgraph-service:
+    image: python:3.10-slim
+    volumes:
+      - ./examples:/app/examples
+    environment:
+      - PYTHONPATH=/app
+    command: >
+      sh -c "pip install langgraph && 
+             python -c '
+             # Example LangGraph integration would go here
+             print(\"LangGraph service ready for AgentBridge integration\")
+             import time
+             while True:
+               time.sleep(60)
+             '"
+    networks:
+      - agent_network
+    depends_on:
+      - agentbridge
+    restart: unless-stopped
+
+  # Dashboard for monitoring
+  dashboard:
+    image: nginx:alpine
+    ports:
+      - "8081:80"
+    volumes:
+      - ./dashboard:/usr/share/nginx/html:ro
+    networks:
+      - agent_network
+    restart: unless-stopped
+
+networks:
+  agent_network:
+    driver: bridge
