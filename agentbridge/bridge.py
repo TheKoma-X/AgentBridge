@@ -12,6 +12,8 @@ from .logging import get_logger, get_metrics_collector
 from .security import get_security_manager, AuthenticationError, AuthorizationError
 from .workflow import WorkflowEngine
 from .models import ModelManager
+from .intelligence import IntelligenceManager, OptimizationStrategy
+# Import ExtendedAdapterManager lazily to avoid requiring aiohttp at module level
 
 
 class AgentBridge:
@@ -31,6 +33,8 @@ class AgentBridge:
         self.security_manager = get_security_manager(self.config)
         self._workflow_engine = None  # Initialize later to avoid circular import
         self.model_manager = ModelManager(self.config)  # Initialize model manager
+        self.intelligence_manager = IntelligenceManager(self.config, self.model_manager)  # Initialize intelligence
+        self._extended_adapter_manager = None  # Initialize extended adapters lazily
 
     def connect_framework(self, framework_name: str, endpoint: str, **kwargs):
         """Connect to a specific agent framework."""
@@ -73,7 +77,7 @@ class AgentBridge:
             raise
 
     async def send_message(self, source_framework: str, target_framework: str, 
-                          message: Message) -> Any:
+                          message: Message, optimize: bool = False) -> Any:
         """Send a message from one framework to another."""
         import time
         start_time = time.time()
@@ -94,6 +98,19 @@ class AgentBridge:
                 logger.error("Bridge", error_msg)
                 metrics.increment_counter('errors')
                 raise ValueError(error_msg)
+            
+            # If optimization is requested, use intelligent routing
+            if optimize:
+                available_frameworks = list(self.adapters.keys())
+                if target_framework not in available_frameworks:
+                    # If requested target is not available, find alternative
+                    optimal_target = await self.intelligence_manager.optimize_task_execution(
+                        str(message.content)[:100] if message.content else "default_task",  # Limit description length
+                        available_frameworks
+                    )
+                    original_target = target_framework
+                    target_framework = optimal_target
+                    logger.info("Bridge", f"Optimized routing: {original_target} -> {target_framework}")
             
             if target_framework not in self.adapters:
                 error_msg = f"Target framework {target_framework} not connected"
@@ -125,15 +142,25 @@ class AgentBridge:
             # Send the message
             result = await self.adapters[target_framework].send_message(translated_msg)
             
-            # Record metrics
+            # Record metrics for intelligence
             elapsed_time = time.time() - start_time
+            await self.intelligence_manager.record_task_outcome(
+                target_framework,
+                str(message.type.value if hasattr(message, 'type') and message.type else 'unknown'),
+                elapsed_time,
+                True,  # success
+                0.01  # placeholder cost
+            )
+            
+            # Record metrics
             metrics.increment_counter('messages_sent')
             metrics.record_timer('avg_response_time', elapsed_time)
             metrics.update_framework_stats(target_framework, 'send_message', success=True)
             
             logger.info("Bridge", f"Message sent from {source_framework} to {target_framework}", {
                 "message_type": message.type.value if hasattr(message, 'type') and message.type else 'unknown',
-                "elapsed_time": elapsed_time
+                "elapsed_time": elapsed_time,
+                "optimized": optimize
             })
             
             return result
@@ -142,6 +169,16 @@ class AgentBridge:
             logger.exception("Bridge", f"Failed to send message from {source_framework} to {target_framework}", exc_info=e)
             metrics.increment_counter('errors')
             metrics.record_timer('avg_response_time', elapsed_time)
+            
+            # Record failure for intelligence
+            await self.intelligence_manager.record_task_outcome(
+                target_framework,
+                str(message.type.value if hasattr(message, 'type') and message.type else 'unknown'),
+                elapsed_time,
+                False,  # failure
+                0.00  # no cost on failure
+            )
+            
             if target_framework:
                 metrics.update_framework_stats(target_framework, 'send_message', success=False)
             raise
@@ -190,6 +227,101 @@ class AgentBridge:
             metrics.increment_counter('errors', failure_count)
                     
         return results
+
+    async def execute_intelligent_workflow(self, task_description: str, 
+                                        required_capabilities: List[str] = None,
+                                        optimization_strategy: OptimizationStrategy = OptimizationStrategy.PERFORMANCE_BASED) -> Dict[str, Any]:
+        """Execute a task using intelligent framework selection and routing."""
+        logger = get_logger()
+        metrics = get_metrics_collector()
+        
+        if required_capabilities is None:
+            required_capabilities = []
+        
+        logger.info("Bridge", f"Executing intelligent workflow for: {task_description[:50]}...", {
+            "capabilities_required": required_capabilities,
+            "strategy": optimization_strategy.value
+        })
+        
+        # Get available frameworks that support required capabilities
+        available_frameworks = []
+        for framework_name in self.adapters.keys():
+            # In a real implementation, we would check framework capabilities
+            # For now, assume all connected frameworks can handle general tasks
+            available_frameworks.append(framework_name)
+        
+        if not available_frameworks:
+            error_msg = "No frameworks available to execute task"
+            logger.error("Bridge", error_msg)
+            return {"status": "error", "error": error_msg}
+        
+        # Use intelligence manager to select optimal framework
+        optimal_framework = await self.intelligence_manager.optimize_task_execution(
+            task_description, 
+            available_frameworks
+        )
+        
+        # Create a simple message for the task
+        from .protocol import Message, MessageType
+        task_message = Message(
+            id=str(uuid.uuid4()),
+            type=MessageType.TASK,
+            source="intelligent_workflow",
+            target=optimal_framework,
+            content={
+                "task": task_description,
+                "capabilities_required": required_capabilities,
+                "execution_context": "intelligent_selection"
+            },
+            timestamp=datetime.utcnow()
+        )
+        
+        # Execute the task on the selected framework
+        try:
+            result = await self.send_message(
+                source_framework="intelligent_workflow",
+                target_framework=optimal_framework,
+                message=task_message,
+                optimize=False  # We already optimized the target
+            )
+            
+            logger.info("Bridge", f"Intelligent workflow completed on {optimal_framework}")
+            
+            return {
+                "status": "success",
+                "result": result,
+                "selected_framework": optimal_framework,
+                "optimization_strategy": optimization_strategy.value
+            }
+        except Exception as e:
+            logger.exception("Bridge", f"Intelligent workflow failed on {optimal_framework}", exc_info=e)
+            return {
+                "status": "error", 
+                "error": str(e),
+                "selected_framework": optimal_framework,
+                "optimization_strategy": optimization_strategy.value
+            }
+
+    def get_extended_adapter_manager(self):
+        """Get extended adapter manager (created lazily to avoid dependency issues)."""
+        if self._extended_adapter_manager is None:
+            # Import here to avoid requiring aiohttp at module level
+            from .adapters_extended import ExtendedAdapterManager
+            self._extended_adapter_manager = ExtendedAdapterManager()
+        return self._extended_adapter_manager
+
+    def get_extended_adapter(self, adapter_type: str, config: Dict[str, Any]):
+        """Get an extended adapter for non-framework integrations."""
+        logger = get_logger()
+        
+        try:
+            adapter_manager = self.get_extended_adapter_manager()
+            adapter = adapter_manager.create_adapter(adapter_type, config)
+            logger.info("Bridge", f"Created extended adapter: {adapter_type}")
+            return adapter
+        except Exception as e:
+            logger.exception("Bridge", f"Failed to create extended adapter: {adapter_type}", exc_info=e)
+            return None
 
     def get_status(self) -> Dict[str, Any]:
         """Get the current status of the bridge."""

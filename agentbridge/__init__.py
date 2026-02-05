@@ -2,7 +2,7 @@
 AgentBridge - Universal AI Agent Interoperability Protocol
 """
 
-__version__ = "0.1.0"
+__version__ = "1.1.0"
 __author__ = "TheKoma-X"
 __license__ = "MIT"
 
@@ -38,6 +38,18 @@ def _import_models():
     from .models import ModelManager, ModelRouter, ModelSpec, ModelCapability, ModelProvider
     return ModelManager, ModelRouter, ModelSpec, ModelCapability, ModelProvider
 
+# Import intelligence components separately to avoid circular imports
+def _import_intelligence():
+    """Lazy import for intelligence components to avoid circular imports."""
+    from .intelligence import IntelligenceManager, OptimizationStrategy
+    return IntelligenceManager, OptimizationStrategy
+
+# Import extended adapter components separately to avoid circular imports
+def _import_extended_adapters():
+    """Lazy import for extended adapter components to avoid circular imports."""
+    from .adapters_extended import ExtendedAdapterManager, BaseExtendedAdapter
+    return ExtendedAdapterManager, BaseExtendedAdapter
+
 # Define all exports
 __all__ = [
     "AgentBridge", 
@@ -67,7 +79,11 @@ __all__ = [
     "ModelRouter",
     "ModelSpec",
     "ModelCapability",
-    "ModelProvider"
+    "ModelProvider",
+    "IntelligenceManager",
+    "OptimizationStrategy",
+    "ExtendedAdapterManager",
+    "BaseExtendedAdapter"
 ]
 
 # Provide lazy loading functions
@@ -80,3 +96,13 @@ def get_model_components():
     """Get model components without causing circular imports."""
     from .models import ModelManager, ModelRouter, ModelSpec, ModelCapability, ModelProvider
     return ModelManager, ModelRouter, ModelSpec, ModelCapability, ModelProvider
+
+def get_intelligence_components():
+    """Get intelligence components without causing circular imports."""
+    from .intelligence import IntelligenceManager, OptimizationStrategy
+    return IntelligenceManager, OptimizationStrategy
+
+def get_extended_adapter_components():
+    """Get extended adapter components without causing circular imports."""
+    from .adapters_extended import ExtendedAdapterManager, BaseExtendedAdapter
+    return ExtendedAdapterManager, BaseExtendedAdapter
