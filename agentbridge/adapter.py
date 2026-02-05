@@ -5,7 +5,7 @@ Adapters for different AI agent frameworks
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, List
 import asyncio
-import aiohttp
+# Defer importing of external dependencies to runtime
 
 
 class BaseAdapter(ABC):
@@ -13,12 +13,17 @@ class BaseAdapter(ABC):
     
     def __init__(self, endpoint: str, **kwargs):
         self.endpoint = endpoint
-        self.session: Optional[aiohttp.ClientSession] = None
+        self.session = None  # Will be initialized at runtime
         self.config = kwargs
         
     async def initialize(self):
         """Initialize the adapter connection."""
-        self.session = aiohttp.ClientSession()
+        # Import here to defer dependency loading
+        try:
+            import aiohttp
+            self.session = aiohttp.ClientSession()
+        except ImportError:
+            raise ImportError("aiohttp is required for network operations. Please install it with 'pip install aiohttp'")
         
     async def cleanup(self):
         """Clean up resources."""
@@ -48,6 +53,9 @@ class CrewAIAdapter(BaseAdapter):
         if not self.session:
             await self.initialize()
             
+        # Import here to defer dependency loading
+        import aiohttp
+        
         # Implementation for CrewAI communication
         # This would connect to CrewAI's API endpoints
         async with self.session.post(f"{self.endpoint}/execute", json=message.to_dict()) as resp:
@@ -57,6 +65,8 @@ class CrewAIAdapter(BaseAdapter):
         if not self.session:
             await self.initialize()
             
+        import aiohttp
+        
         async with self.session.get(f"{self.endpoint}/capabilities") as resp:
             return await resp.json()
     
@@ -64,6 +74,8 @@ class CrewAIAdapter(BaseAdapter):
         if not self.session:
             await self.initialize()
             
+        import aiohttp
+        
         async with self.session.get(f"{self.endpoint}/tools") as resp:
             return await resp.json()
 
@@ -75,6 +87,8 @@ class LangGraphAdapter(BaseAdapter):
         if not self.session:
             await self.initialize()
             
+        import aiohttp
+        
         # Implementation for LangGraph communication
         async with self.session.post(f"{self.endpoint}/invoke", json=message.to_dict()) as resp:
             return await resp.json()
@@ -83,6 +97,8 @@ class LangGraphAdapter(BaseAdapter):
         if not self.session:
             await self.initialize()
             
+        import aiohttp
+        
         async with self.session.get(f"{self.endpoint}/state") as resp:
             return await resp.json()
     
@@ -90,6 +106,8 @@ class LangGraphAdapter(BaseAdapter):
         if not self.session:
             await self.initialize()
             
+        import aiohttp
+        
         async with self.session.get(f"{self.endpoint}/nodes") as resp:
             return await resp.json()
 
@@ -101,6 +119,8 @@ class AutoGenAdapter(BaseAdapter):
         if not self.session:
             await self.initialize()
             
+        import aiohttp
+        
         # Implementation for AutoGen communication
         async with self.session.post(f"{self.endpoint}/chat", json=message.to_dict()) as resp:
             return await resp.json()
@@ -109,6 +129,8 @@ class AutoGenAdapter(BaseAdapter):
         if not self.session:
             await self.initialize()
             
+        import aiohttp
+        
         async with self.session.get(f"{self.endpoint}/agents") as resp:
             return await resp.json()
     
@@ -116,6 +138,8 @@ class AutoGenAdapter(BaseAdapter):
         if not self.session:
             await self.initialize()
             
+        import aiohttp
+        
         async with self.session.get(f"{self.endpoint}/functions") as resp:
             return await resp.json()
 
@@ -127,6 +151,8 @@ class ClaudeFlowAdapter(BaseAdapter):
         if not self.session:
             await self.initialize()
             
+        import aiohttp
+        
         # Implementation for Claude-Flow communication
         headers = {'Content-Type': 'application/json'}
         async with self.session.post(f"{self.endpoint}/mcp", json=message.to_dict(), headers=headers) as resp:
@@ -136,6 +162,8 @@ class ClaudeFlowAdapter(BaseAdapter):
         if not self.session:
             await self.initialize()
             
+        import aiohttp
+        
         async with self.session.get(f"{self.endpoint}/mcp/capabilities") as resp:
             return await resp.json()
     
@@ -143,6 +171,8 @@ class ClaudeFlowAdapter(BaseAdapter):
         if not self.session:
             await self.initialize()
             
+        import aiohttp
+        
         async with self.session.get(f"{self.endpoint}/mcp/tools") as resp:
             return await resp.json()
 

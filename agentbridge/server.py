@@ -2,8 +2,7 @@
 FastAPI server for AgentBridge - Provides REST and WebSocket endpoints
 """
 
-from fastapi import FastAPI, WebSocket, HTTPException, BackgroundTasks
-from fastapi.middleware.cors import CORSMiddleware
+# FastAPI will be imported at runtime when needed
 from typing import Dict, Any
 import asyncio
 import json
@@ -13,6 +12,12 @@ from .protocol import Message, MessageType
 
 def create_app(agent_bridge: AgentBridge):
     """Create and configure the FastAPI application."""
+    # Import FastAPI here to defer loading of dependencies
+    try:
+        from fastapi import FastAPI, WebSocket, HTTPException, BackgroundTasks
+        from fastapi.middleware.cors import CORSMiddleware
+    except ImportError:
+        raise ImportError("FastAPI is required to run the server. Please install it with 'pip install fastapi uvicorn'")
     
     app = FastAPI(
         title="AgentBridge API",

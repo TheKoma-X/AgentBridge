@@ -7,6 +7,8 @@ import json
 from typing import Dict, List, Optional, Any, Callable
 from .protocol import AgentProtocol, Message
 from .adapter import AdapterRegistry
+from .config import BridgeConfig, ConfigManager
+from .logging import get_logger, get_metrics_collector
 
 
 class AgentBridge:
@@ -21,98 +23,151 @@ class AgentBridge:
         self.adapter_registry = AdapterRegistry()
         self.connected_frameworks: Dict[str, Any] = {}
         self.message_queue = asyncio.Queue()
-        self.config = self._load_config(config_path) if config_path else {}
-        
-    def _load_config(self, config_path: str) -> dict:
-        """Load configuration from file."""
-        import yaml
-        with open(config_path, 'r') as f:
-            return yaml.safe_load(f)
-    
-    def register_adapter(self, framework_name: str, adapter_class: Any):
-        """Register a new adapter for a specific agent framework."""
-        self.adapter_registry.register(framework_name, adapter_class)
-        
+        self.config_manager = ConfigManager(config_path)
+        self.config = self.config_manager.config
+
     def connect_framework(self, framework_name: str, endpoint: str, **kwargs):
         """Connect to a specific agent framework."""
-        if framework_name not in self.adapter_registry.adapters:
-            raise ValueError(f"Adapter for {framework_name} not registered")
-            
-        adapter_class = self.adapter_registry.adapters[framework_name]
-        adapter_instance = adapter_class(endpoint, **kwargs)
-        self.adapters[framework_name] = adapter_instance
-        self.connected_frameworks[framework_name] = endpoint
+        logger = get_logger()
+        metrics = get_metrics_collector()
         
-        print(f"Connected to {framework_name} at {endpoint}")
-        return adapter_instance
-    
+        try:
+            if framework_name not in self.adapter_registry.adapters:
+                error_msg = f"Adapter for {framework_name} not registered"
+                logger.error("Bridge", error_msg)
+                raise ValueError(error_msg)
+                
+            adapter_class = self.adapter_registry.adapters[framework_name]
+            adapter_instance = adapter_class(endpoint, **kwargs)
+            self.adapters[framework_name] = adapter_instance
+            self.connected_frameworks[framework_name] = endpoint
+            
+            # Add framework to config if not already present
+            if not self.config_manager.config.get_framework(framework_name):
+                self.config_manager.config.add_framework(framework_name, endpoint, **kwargs)
+            
+            success_msg = f"Connected to {framework_name} at {endpoint}"
+            logger.info("Bridge", success_msg)
+            metrics.increment_counter('connections')
+            metrics.update_framework_stats(framework_name, 'connect', success=True)
+            
+            print(success_msg)
+            return adapter_instance
+        except Exception as e:
+            logger.exception("Bridge", f"Failed to connect to {framework_name}", exc_info=e)
+            metrics.increment_counter('errors')
+            if framework_name:
+                metrics.update_framework_stats(framework_name, 'connect', success=False)
+            raise
+
     async def send_message(self, source_framework: str, target_framework: str, 
                           message: Message) -> Any:
         """Send a message from one framework to another."""
-        if target_framework not in self.adapters:
-            raise ValueError(f"Target framework {target_framework} not connected")
-            
-        # Translate message to target framework's protocol
-        translated_msg = self.protocol.translate_message(
-            message, 
-            self.adapters[source_framework].protocol_version,
-            self.adapters[target_framework].protocol_version
-        )
+        import time
+        start_time = time.time()
         
-        # Send the message
-        result = await self.adapters[target_framework].send_message(translated_msg)
-        return result
-    
+        logger = get_logger()
+        metrics = get_metrics_collector()
+        
+        try:
+            if target_framework not in self.adapters:
+                error_msg = f"Target framework {target_framework} not connected"
+                logger.error("Bridge", error_msg)
+                metrics.increment_counter('errors')
+                raise ValueError(error_msg)
+            
+            if source_framework not in self.adapters:
+                error_msg = f"Source framework {source_framework} not connected"
+                logger.error("Bridge", error_msg)
+                metrics.increment_counter('errors')
+                raise ValueError(error_msg)
+                
+            # Translate message to target framework's protocol
+            translated_msg = self.protocol.translate_message(
+                message, 
+                "current",  # Would use actual protocol versions in real implementation
+                "current"   # Would use actual protocol versions in real implementation
+            )
+            
+            # Send the message
+            result = await self.adapters[target_framework].send_message(translated_msg)
+            
+            # Record metrics
+            elapsed_time = time.time() - start_time
+            metrics.increment_counter('messages_sent')
+            metrics.record_timer('avg_response_time', elapsed_time)
+            metrics.update_framework_stats(target_framework, 'send_message', success=True)
+            
+            logger.info("Bridge", f"Message sent from {source_framework} to {target_framework}", {
+                "message_type": message.type.value if hasattr(message, 'type') and message.type else 'unknown',
+                "elapsed_time": elapsed_time
+            })
+            
+            return result
+        except Exception as e:
+            elapsed_time = time.time() - start_time
+            logger.exception("Bridge", f"Failed to send message from {source_framework} to {target_framework}", exc_info=e)
+            metrics.increment_counter('errors')
+            metrics.record_timer('avg_response_time', elapsed_time)
+            if target_framework:
+                metrics.update_framework_stats(target_framework, 'send_message', success=False)
+            raise
+
     async def broadcast_message(self, source_framework: str, message: Message, 
                                target_frameworks: Optional[List[str]] = None) -> Dict[str, Any]:
         """Broadcast a message to multiple frameworks."""
+        logger = get_logger()
+        metrics = get_metrics_collector()
+        
         if target_frameworks is None:
             target_frameworks = list(self.adapters.keys())
+        
+        logger.info("Bridge", f"Broadcasting message from {source_framework} to {len(target_frameworks)} frameworks", {
+            "target_frameworks": target_frameworks,
+            "message_type": message.type.value if hasattr(message, 'type') and message.type else 'unknown'
+        })
             
         results = {}
+        success_count = 0
+        failure_count = 0
+        
         for framework in target_frameworks:
             if framework != source_framework:
                 try:
-                    results[framework] = await self.send_message(
+                    result = await self.send_message(
                         source_framework, framework, message
                     )
+                    results[framework] = result
+                    success_count += 1
                 except Exception as e:
-                    results[framework] = {"error": str(e)}
+                    error_result = {"error": str(e)}
+                    results[framework] = error_result
+                    failure_count += 1
+                    logger.warning("Bridge", f"Broadcast to {framework} failed", error_result)
+                    
+        logger.info("Bridge", f"Broadcast completed: {success_count} successes, {failure_count} failures", {
+            "total_targets": len([f for f in target_frameworks if f != source_framework]),
+            "successes": success_count,
+            "failures": failure_count
+        })
+        
+        # Update metrics
+        metrics.increment_counter('messages_sent', success_count)
+        if failure_count > 0:
+            metrics.increment_counter('errors', failure_count)
                     
         return results
-    
-    async def start_server(self, host: str = "0.0.0.0", port: int = 8080):
-        """Start the bridge server to accept external connections."""
-        import uvicorn
-        from .server import create_app
-        
-        app = create_app(self)
-        config = uvicorn.Config(app, host=host, port=port, log_level="info")
-        server = uvicorn.Server(config)
-        
-        print(f"AgentBridge server starting on {host}:{port}")
-        await server.serve()
-    
+
     def get_status(self) -> Dict[str, Any]:
         """Get the current status of the bridge."""
+        from .logging import get_metrics_collector
+        
+        metrics = get_metrics_collector()
+        
         return {
             "connected_frameworks": list(self.connected_frameworks.keys()),
             "adapter_count": len(self.adapters),
             "registry_status": self.adapter_registry.get_status(),
-            "config_loaded": bool(self.config)
+            "config_loaded": bool(self.config),
+            "metrics": metrics.get_metrics()
         }
-    
-    async def run_bridge_loop(self):
-        """Main bridge loop for handling messages."""
-        while True:
-            try:
-                message = await self.message_queue.get()
-                await self._process_message(message)
-                self.message_queue.task_done()
-            except Exception as e:
-                print(f"Error processing message: {e}")
-                
-    async def _process_message(self, message: Dict[str, Any]):
-        """Process an incoming message."""
-        # Implementation for message processing
-        pass
