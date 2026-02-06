@@ -1,0 +1,14 @@
+{
+  "id": "trace_2",
+  "timestamp": 1770279906.177537,
+  "source": "test_source",
+  "target": "test_target",
+  "message": {
+    "task": "Test task 2",
+    "data": "Data 2"
+  },
+  "result": null,
+  "duration": 4.2438507080078125e-05,
+  "success": false,
+  "error": "Target framework test_target not connected"
+}

@@ -6,6 +6,7 @@ Provides vector storage and retrieval capabilities.
 import json
 import math
 import os
+import sqlite3
 from typing import List, Dict, Any, Optional, Tuple, Union
 from datetime import datetime
 from dataclasses import dataclass, field, asdict
@@ -21,17 +22,31 @@ class MemoryEntry:
 
 class VectorMemory:
     """
-    A lightweight, pure-Python vector memory implementation.
-    Does not require numpy or external vector databases.
+    A persistent vector memory implementation using SQLite.
+    Stores content and metadata in SQLite, and performs vector similarity search in-memory or via SQL extensions if available.
     """
     
     def __init__(self, persistence_path: Optional[str] = None):
-        self.memories: List[MemoryEntry] = []
-        self.persistence_path = persistence_path
-        
-        if self.persistence_path and os.path.exists(self.persistence_path):
-            self.load()
+        self.persistence_path = persistence_path or "agent_memory.db"
+        self._init_db()
             
+    def _init_db(self):
+        """Initialize the SQLite database."""
+        try:
+            with sqlite3.connect(self.persistence_path) as conn:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS memories (
+                        id TEXT PRIMARY KEY,
+                        content TEXT NOT NULL,
+                        metadata TEXT,
+                        embedding TEXT,
+                        timestamp REAL
+                    )
+                """)
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON memories(timestamp)")
+        except Exception as e:
+            print(f"Error initializing memory DB: {e}")
+
     def add(self, content: str, embedding: Optional[List[float]] = None, metadata: Dict[str, Any] = None) -> str:
         """Add a memory entry."""
         entry = MemoryEntry(
@@ -39,32 +54,58 @@ class VectorMemory:
             embedding=embedding,
             metadata=metadata or {}
         )
-        self.memories.append(entry)
         
-        if self.persistence_path:
-            self.save()
+        try:
+            with sqlite3.connect(self.persistence_path) as conn:
+                conn.execute(
+                    "INSERT INTO memories (id, content, metadata, embedding, timestamp) VALUES (?, ?, ?, ?, ?)",
+                    (
+                        entry.id,
+                        entry.content,
+                        json.dumps(entry.metadata),
+                        json.dumps(entry.embedding) if entry.embedding else None,
+                        entry.timestamp
+                    )
+                )
+        except Exception as e:
+            print(f"Error adding memory: {e}")
             
         return entry.id
         
     def search(self, query_embedding: List[float], top_k: int = 5, threshold: float = 0.0) -> List[Tuple[MemoryEntry, float]]:
         """
         Search for memories similar to the query embedding.
-        Uses cosine similarity.
+        Loads vectors into memory for cosine similarity calculation (simplistic approach for small-medium datasets).
         """
         if not query_embedding:
             return []
             
         results = []
         
-        for memory in self.memories:
-            if not memory.embedding:
-                continue
+        try:
+            with sqlite3.connect(self.persistence_path) as conn:
+                cursor = conn.execute("SELECT id, content, metadata, embedding, timestamp FROM memories WHERE embedding IS NOT NULL")
                 
-            # Calculate cosine similarity
-            similarity = self._cosine_similarity(query_embedding, memory.embedding)
-            
-            if similarity >= threshold:
-                results.append((memory, similarity))
+                for row in cursor:
+                    try:
+                        embedding = json.loads(row[3])
+                        similarity = self._cosine_similarity(query_embedding, embedding)
+                        
+                        if similarity >= threshold:
+                            entry = MemoryEntry(
+                                id=row[0],
+                                content=row[1],
+                                metadata=json.loads(row[2]) if row[2] else {},
+                                embedding=embedding,
+                                timestamp=row[4]
+                            )
+                            results.append((entry, similarity))
+                    except Exception:
+                        continue
+                        
+        except Exception as e:
+            print(f"Error searching memory: {e}")
+            return []
                 
         # Sort by similarity (descending)
         results.sort(key=lambda x: x[1], reverse=True)
@@ -84,33 +125,14 @@ class VectorMemory:
             return 0.0
             
         return dot_product / (norm1 * norm2)
-        
-    def save(self):
-        """Save memories to disk."""
-        if not self.persistence_path:
-            return
-            
-        data = [asdict(m) for m in self.memories]
-        try:
-            with open(self.persistence_path, 'w') as f:
-                json.dump(data, f, indent=2)
-        except Exception as e:
-            print(f"Error saving memory: {e}")
-            
+
     def load(self):
-        """Load memories from disk."""
-        if not self.persistence_path or not os.path.exists(self.persistence_path):
-            return
-            
-        try:
-            with open(self.persistence_path, 'r') as f:
-                data = json.load(f)
-                
-            self.memories = []
-            for item in data:
-                self.memories.append(MemoryEntry(**item))
-        except Exception as e:
-            print(f"Error loading memory: {e}")
+        """No-op for SQLite implementation as data is loaded on demand."""
+        pass
+    
+    def save(self):
+        """No-op for SQLite implementation as data is saved immediately."""
+        pass
 
 class MemoryManager:
     """Manager for system-wide memory."""
@@ -122,8 +144,13 @@ class MemoryManager:
         else:
             self.config = config or {}
             
+        # Determine DB path
+        db_path = self.config.get("memory_path", "agent_memory.db")
+        if db_path.endswith(".json"):
+            db_path = db_path.replace(".json", ".db")
+            
         self.vector_store = VectorMemory(
-            persistence_path=self.config.get("memory_path", "agent_memory.json")
+            persistence_path=db_path
         )
         
     def remember(self, content: str, metadata: Dict[str, Any] = None):

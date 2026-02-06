@@ -164,7 +164,7 @@ def test_usage_statistics():
     bridge.model_manager.register_model(sample_model)
     
     # Get initial stats
-    stats = bridge.model_manager.get_usage_statistics()
+    stats = bridge.model_manager.get_usage_statistics_sync()
     assert stats["models_registered"] == 1
     assert stats["total_requests"] == 0
     assert stats["total_cost"] == 0.0

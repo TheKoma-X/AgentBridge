@@ -5,7 +5,7 @@ Configuration management for AgentBridge
 import os
 import json
 import yaml
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Callable
 from pathlib import Path
 from dataclasses import dataclass, field
 from .utils import load_config, save_config, merge_configs
@@ -140,9 +140,14 @@ class ConfigManager:
     def __init__(self, config_path: Optional[str] = None):
         self.config_path = config_path or "agentbridge.yaml"
         self.config: BridgeConfig = BridgeConfig()
+        self._last_modified_time = 0
+        self._watch_interval = 5  # Check every 5 seconds
+        self._watch_task = None
+        self._change_callbacks = []  # Callbacks to notify on config changes
         
         if os.path.exists(self.config_path):
             self.load_config()
+            self._last_modified_time = os.path.getmtime(self.config_path)
     
     def load_config(self) -> None:
         """Load configuration from file."""
@@ -192,6 +197,68 @@ class ConfigManager:
                 errors.append(f"Framework endpoint must be a valid URL: {framework.endpoint}")
         
         return errors
+    
+    def add_change_callback(self, callback: Callable[[BridgeConfig], None]) -> None:
+        """Add a callback to be notified when configuration changes."""
+        self._change_callbacks.append(callback)
+    
+    def remove_change_callback(self, callback: Callable[[BridgeConfig], None]) -> None:
+        """Remove a configuration change callback."""
+        if callback in self._change_callbacks:
+            self._change_callbacks.remove(callback)
+    
+    def _notify_change(self) -> None:
+        """Notify all callbacks about configuration change."""
+        for callback in self._change_callbacks:
+            try:
+                callback(self.config)
+            except Exception as e:
+                print(f"Error in config change callback: {e}")
+    
+    async def start_watching(self) -> None:
+        """Start watching the config file for changes."""
+        if self._watch_task:
+            return  # Already watching
+        
+        self._watch_task = asyncio.create_task(self._watch_config_changes())
+    
+    async def stop_watching(self) -> None:
+        """Stop watching the config file."""
+        if self._watch_task:
+            self._watch_task.cancel()
+            try:
+                await self._watch_task
+            except asyncio.CancelledError:
+                pass
+            self._watch_task = None
+    
+    async def _watch_config_changes(self) -> None:
+        """Background task to watch for config changes."""
+        while True:
+            try:
+                await asyncio.sleep(self._watch_interval)
+                
+                if os.path.exists(self.config_path):
+                    current_mtime = os.path.getmtime(self.config_path)
+                    
+                    if current_mtime > self._last_modified_time:
+                        # Config file has been modified
+                        old_config = self.config
+                        try:
+                            self.load_config()
+                            self._last_modified_time = current_mtime
+                            
+                            print(f"Configuration reloaded from {self.config_path}")
+                            self._notify_change()
+                        except Exception as e:
+                            print(f"Error reloading config: {e}")
+                            # Revert to old config if reload failed
+                            self.config = old_config
+                            
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                print(f"Error in config watcher: {e}")
     
     def get_active_frameworks(self) -> List[FrameworkConfig]:
         """Get list of enabled frameworks."""

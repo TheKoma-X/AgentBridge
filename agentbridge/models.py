@@ -8,10 +8,11 @@ import json
 from enum import Enum
 from typing import Dict, Any, List, Optional, Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 import uuid
 from .logging import get_logger
 from .config import BridgeConfig
+import time
 
 
 class ModelCapability(Enum):
@@ -73,11 +74,24 @@ class ModelRouter:
         self.models: Dict[str, ModelSpec] = {}
         self.stats: Dict[str, ModelUsageStats] = {}
         self.logger = get_logger()
+        # Cache for frequently accessed model lookups
+        self._capability_cache: Dict[str, List[ModelSpec]] = {}
+        self._best_model_cache: Dict[str, Optional[ModelSpec]] = {}
+        self._cache_timestamps: Dict[str, float] = {}
+        self._cache_ttl = 300  # 5 minutes TTL
+    
+    def _invalidate_cache(self):
+        """Invalidate cache when models are registered/unregistered"""
+        self._capability_cache.clear()
+        self._best_model_cache.clear()
+        self._cache_timestamps.clear()
     
     def register_model(self, model_spec: ModelSpec):
         """Register a new model with the router"""
         self.models[model_spec.id] = model_spec
         self.stats[model_spec.id] = ModelUsageStats(model_id=model_spec.id)
+        # Invalidate cache since models changed
+        self._invalidate_cache()
         self.logger.info("ModelRouter", f"Registered model: {model_spec.name} ({model_spec.id})")
     
     def unregister_model(self, model_id: str):
@@ -86,17 +100,46 @@ class ModelRouter:
             del self.models[model_id]
             if model_id in self.stats:
                 del self.stats[model_id]
+            # Invalidate cache since models changed
+            self._invalidate_cache()
             self.logger.info("ModelRouter", f"Unregistered model: {model_id}")
     
     def find_models_by_capability(self, capability: ModelCapability) -> List[ModelSpec]:
         """Find all models that support a specific capability"""
-        return [model for model in self.models.values() 
-                if capability in model.capabilities and model.is_active]
+        cache_key = f"capability_{capability.value}"
+        current_time = time.time()
+        
+        # Check if cached result exists and is still valid
+        if cache_key in self._capability_cache:
+            if cache_key in self._cache_timestamps:
+                if current_time - self._cache_timestamps[cache_key] < self._cache_ttl:
+                    return self._capability_cache[cache_key]
+        
+        # Compute result
+        result = [model for model in self.models.values() 
+                 if capability in model.capabilities and model.is_active]
+        
+        # Cache the result
+        self._capability_cache[cache_key] = result
+        self._cache_timestamps[cache_key] = current_time
+        
+        return result
     
     def find_best_model(self, capabilities: List[ModelCapability], 
                        max_tokens_needed: int = None,
                        provider_preference: ModelProvider = None) -> Optional[ModelSpec]:
         """Find the best model based on requirements"""
+        # Create cache key from parameters
+        capabilities_str = '_'.join(sorted([cap.value for cap in capabilities]))
+        cache_key = f"best_{capabilities_str}_{max_tokens_needed}_{provider_preference.value if provider_preference else 'any'}"
+        current_time = time.time()
+        
+        # Check if cached result exists and is still valid
+        if cache_key in self._best_model_cache:
+            if cache_key in self._cache_timestamps:
+                if current_time - self._cache_timestamps[cache_key] < self._cache_ttl:
+                    return self._best_model_cache[cache_key]
+        
         candidates = list(self.models.values())
         
         # Filter by capabilities
@@ -122,10 +165,15 @@ class ModelRouter:
                 return (model.pricing['input'] + model.pricing['output']) / model.context_window
             return float('inf')
         
+        best_model = None
         if candidates:
-            return min(candidates, key=calculate_cost_efficiency)
+            best_model = min(candidates, key=calculate_cost_efficiency)
         
-        return None
+        # Cache the result
+        self._best_model_cache[cache_key] = best_model
+        self._cache_timestamps[cache_key] = current_time
+        
+        return best_model
     
     async def route_request(self, capabilities: List[ModelCapability], 
                           request_payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -231,8 +279,8 @@ class ModelManager:
         # This is a simplified version - in reality, this could be more sophisticated
         return await self.router.route_request(required_capabilities, {"task": task_description})
     
-    def get_usage_statistics(self) -> Dict[str, Any]:
-        """Get overall usage statistics"""
+    def get_usage_statistics_sync(self) -> Dict[str, Any]:
+        """Get overall usage statistics (sync version for backward compatibility)"""
         total_requests = sum(stat.total_requests for stat in self.router.stats.values())
         total_cost = sum(stat.total_cost for stat in self.router.stats.values())
         
@@ -249,3 +297,7 @@ class ModelManager:
                 for model_id, stat in self.router.stats.items()
             }
         }
+    
+    async def get_usage_statistics(self) -> Dict[str, Any]:
+        """Get overall usage statistics"""
+        return self.get_usage_statistics_sync()

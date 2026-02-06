@@ -25,6 +25,14 @@ class AuthorizationError(Exception):
     pass
 
 
+class ResourcePermission:
+    """Defines specific permissions for resources."""
+    
+    def __init__(self, resource: str, actions: List[str]):
+        self.resource = resource  # e.g., "frameworks", "models", "workflows"
+        self.actions = actions    # e.g., ["read", "write", "delete", "execute"]
+
+
 class SecurityManager:
     """
     Security manager for AgentBridge - handles authentication, authorization, and encryption
@@ -33,6 +41,8 @@ class SecurityManager:
     def __init__(self, config: BridgeConfig):
         self.config = config
         self.tokens: Dict[str, Dict[str, Any]] = {}
+        self.roles: Dict[str, List[ResourcePermission]] = {}  # Role-based permissions
+        self.user_roles: Dict[str, List[str]] = {}  # Token to roles mapping
         self._initialize_security()
     
     def _initialize_security(self):
@@ -44,7 +54,8 @@ class SecurityManager:
                 self.tokens[token] = {
                     'permissions': ['read', 'write'],
                     'expires_at': None,
-                    'created_at': datetime.now()
+                    'created_at': datetime.now(),
+                    'roles': []  # No roles initially
                 }
         
         # Generate encryption key if needed
@@ -54,6 +65,39 @@ class SecurityManager:
         else:
             self.encryption_key = None
             self.cipher_suite = None
+    
+    def create_role(self, role_name: str, permissions: List[ResourcePermission]):
+        """Create a new role with specific permissions."""
+        self.roles[role_name] = permissions
+    
+    def assign_role_to_token(self, token: str, role_name: str):
+        """Assign a role to a token."""
+        if token in self.tokens and role_name in self.roles:
+            if role_name not in self.tokens[token]['roles']:
+                self.tokens[token]['roles'].append(role_name)
+    
+    def revoke_role_from_token(self, token: str, role_name: str):
+        """Remove a role from a token."""
+        if token in self.tokens and role_name in self.tokens[token]['roles']:
+            self.tokens[token]['roles'].remove(role_name)
+    
+    def has_resource_permission(self, token: str, resource: str, action: str) -> bool:
+        """Check if a token has permission to perform an action on a resource."""
+        if token not in self.tokens:
+            return False
+        
+        # Check direct permissions
+        if action in self.tokens[token].get('permissions', []):
+            return True
+        
+        # Check role-based permissions
+        for role_name in self.tokens[token].get('roles', []):
+            if role_name in self.roles:
+                for permission in self.roles[role_name]:
+                    if permission.resource == resource and action in permission.actions:
+                        return True
+        
+        return False
     
     def _generate_encryption_key(self) -> bytes:
         """Generate a new encryption key."""
@@ -67,7 +111,8 @@ class SecurityManager:
         self.tokens[token] = {
             'permissions': permissions or ['read', 'write'],
             'expires_at': expires_at,
-            'created_at': datetime.now()
+            'created_at': datetime.now(),
+            'roles': []  # Initialize roles for new tokens
         }
         
         return token
@@ -89,7 +134,7 @@ class SecurityManager:
         
         return True
     
-    def authorize(self, token: str, permission: str) -> bool:
+    def authorize(self, token: str, permission: str, resource: str = None) -> bool:
         """Authorize a token for a specific permission."""
         if token not in self.tokens:
             raise AuthenticationError("Invalid token")
@@ -101,11 +146,16 @@ class SecurityManager:
             del self.tokens[token]  # Remove expired token
             raise AuthenticationError("Token has expired")
         
-        # Check permissions
-        if permission not in token_info['permissions']:
-            raise AuthorizationError(f"Permission '{permission}' not granted")
+        # If resource is specified, use resource-based permission check
+        if resource:
+            if self.has_resource_permission(token, resource, permission):
+                return True
+        else:
+            # Check direct permissions
+            if permission in token_info['permissions']:
+                return True
         
-        return True
+        raise AuthorizationError(f"Permission '{permission}' not granted for resource '{resource or 'default'}'")
     
     def encrypt_data(self, data: str) -> Optional[str]:
         """Encrypt data if encryption is enabled."""
@@ -185,9 +235,9 @@ class SecurityMiddleware:
         
         return token
     
-    async def authorize_request(self, token: str, permission: str) -> bool:
+    async def authorize_request(self, token: str, permission: str, resource: str = None) -> bool:
         """Authorize a request for a specific permission."""
-        return self.security_manager.authorize(token, permission)
+        return self.security_manager.authorize(token, permission, resource)
     
     def encrypt_response(self, response_data: Dict[str, Any]) -> Dict[str, Any]:
         """Encrypt sensitive parts of response if needed."""

@@ -17,6 +17,8 @@ from .memory import MemoryManager
 from .events import EventBus, Event, EventType
 from .evaluation import TraceRecorder
 # Import ExtendedAdapterManager lazily to avoid requiring aiohttp at module level
+import uuid
+from datetime import datetime
 
 
 class AgentBridge:
@@ -225,6 +227,88 @@ class AgentBridge:
                 metrics.update_framework_stats(target_framework, 'send_message', success=False)
             raise
 
+    async def send_batch_messages(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Send multiple messages in a batch for improved performance."""
+        import time
+        start_time = time.time()
+        logger = get_logger()
+        metrics = get_metrics_collector()
+        
+        results = {
+            'successful': [],
+            'failed': [],
+            'total': len(messages),
+            'batch_start_time': start_time
+        }
+        
+        # Process messages concurrently for better performance
+        async def process_single_message(msg_data):
+            try:
+                source_framework = msg_data['source']
+                target_framework = msg_data['target']
+                message = msg_data['message']
+                optimize = msg_data.get('optimize', False)
+                
+                result = await self.send_message(source_framework, target_framework, message, optimize)
+                
+                return {
+                    'status': 'success',
+                    'result': result,
+                    'message_id': message.id if hasattr(message, 'id') else "unknown"
+                }
+            except Exception as e:
+                return {
+                    'status': 'error',
+                    'error': str(e),
+                    'message_id': msg_data['message'].id if hasattr(msg_data['message'], 'id') else "unknown"
+                }
+        
+        # Execute all messages concurrently
+        tasks = [process_single_message(msg) for msg in messages]
+        individual_results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Process results
+        for i, result in enumerate(individual_results):
+            if isinstance(result, Exception):
+                results['failed'].append({
+                    'index': i,
+                    'error': str(result),
+                    'message_data': messages[i]
+                })
+            elif isinstance(result, dict) and result.get('status') == 'error':
+                results['failed'].append({
+                    'index': i,
+                    'error': result['error'],
+                    'message_id': result['message_id']
+                })
+            else:
+                results['successful'].append({
+                    'index': i,
+                    'result': result.get('result'),
+                    'message_id': result.get('message_id')
+                })
+        
+        # Log batch results
+        elapsed_time = time.time() - start_time
+        success_count = len(results['successful'])
+        failure_count = len(results['failed'])
+        
+        logger.info("Bridge", f"Batch message processing completed", {
+            'total_messages': len(messages),
+            'successful': success_count,
+            'failed': failure_count,
+            'batch_duration': elapsed_time
+        })
+        
+        # Update metrics
+        metrics.increment_counter('batch_operations', 1)
+        metrics.increment_counter('messages_sent', success_count)
+        if failure_count > 0:
+            metrics.increment_counter('errors', failure_count)
+        metrics.record_timer('avg_batch_duration', elapsed_time)
+        
+        return results
+
     async def broadcast_message(self, source_framework: str, message: Message, 
                                target_frameworks: Optional[List[str]] = None) -> Dict[str, Any]:
         """Broadcast a message to multiple frameworks."""
@@ -388,7 +472,41 @@ class AgentBridge:
         
         # Add model manager info
         if hasattr(self, 'model_manager') and self.model_manager:
-            model_stats = self.model_manager.get_usage_statistics()
+            # Since get_usage_statistics is now async, we need to handle this carefully
+            # For backward compatibility, we'll use a sync version in the model manager
+            model_stats = self.model_manager.get_usage_statistics_sync()
+            status["model_manager"] = {
+                "registered_models": model_stats["models_registered"],
+                "total_requests": model_stats["total_requests"],
+                "total_cost": model_stats["total_cost"]
+            }
+        
+        return status
+
+    async def get_status_async(self) -> Dict[str, Any]:
+        """Get the current status of the bridge (async version)."""
+        from .logging import get_metrics_collector
+        
+        metrics = get_metrics_collector()
+        
+        status = {
+            "connected_frameworks": list(self.connected_frameworks.keys()),
+            "adapter_count": len(self.adapters),
+            "registry_status": self.adapter_registry.get_status(),
+            "config_loaded": bool(self.config),
+            "metrics": metrics.get_metrics()
+        }
+        
+        # Add workflow info if available
+        if hasattr(self, '_workflow_engine') and self._workflow_engine:
+            status["workflow_engine"] = {
+                "registered_workflows": len(self._workflow_engine.workflow_definitions),
+                "active_executions": len(self._workflow_engine.active_executions)
+            }
+        
+        # Add model manager info
+        if hasattr(self, 'model_manager') and self.model_manager:
+            model_stats = await self.model_manager.get_usage_statistics()
             status["model_manager"] = {
                 "registered_models": model_stats["models_registered"],
                 "total_requests": model_stats["total_requests"],
